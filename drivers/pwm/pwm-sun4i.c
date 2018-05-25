@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/time.h>
+#include <linux/delay.h>
 
 #define PWM_CTRL_REG		0x0
 
@@ -96,6 +97,21 @@ static inline void sun4i_pwm_writel(struct sun4i_pwm_chip *chip,
 	writel(val, chip->base + offset);
 }
 
+static inline void sun4i_pwm_sleep_cycles(u32 prescaler_value, u32 clk_rate, u32 num_cycles) {
+	u64 tmp;
+	u32 ns;
+	
+	tmp = (u64)1000000000 * prescaler_value;
+	do_div(tmp, clk_rate);
+	ns = (u32)tmp * num_cycles;
+	
+	if (ns / 1000000U > MAX_UDELAY_MS) {
+		msleep(ns / 1000000U);
+	} else {
+		ndelay(ns);
+	}
+}
+
 static int sun4i_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 			    int duty_ns, int period_ns)
 {
@@ -103,7 +119,7 @@ static int sun4i_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	u32 prd, dty, val, clk_gate;
 	u64 clk_rate, div = 0;
 	unsigned int prescaler = 0;
-	int err;
+	int i, err;
 
 	clk_rate = clk_get_rate(sun4i_pwm->clk);
 
@@ -166,21 +182,85 @@ static int sun4i_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
 	}
 
-	val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
 	val &= ~BIT_CH(PWM_PRESCAL_MASK, pwm->hwpwm);
-	val |= BIT_CH(prescaler, pwm->hwpwm);
+	val |= BIT_CH(sun4i_pwm->data->has_prescaler_bypass ? PWM_PRESCAL_MASK : 0, pwm->hwpwm); // 1 or 120 as prescaler
 	sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
 
-	val = (dty & PWM_DTY_MASK) | PWM_PRD(prd);
-	sun4i_pwm_writel(sun4i_pwm, val, PWM_CH_PRD(pwm->hwpwm));
+	// Emil: make sure clock gate is active before duty/period change
+	val |= BIT_CH(PWM_CLK_GATING, pwm->hwpwm);
+	sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+	spin_unlock(&sun4i_pwm->ctrl_lock);
 
-	if (clk_gate) {
+	sun4i_pwm_writel(sun4i_pwm,
+			 0,
+			 PWM_CH_PRD(pwm->hwpwm));
+
+	// Wait until value has been written
+	if (sun4i_pwm->data->has_rdy) {
+		for (i = 0; i < 10000; i++) { // Shouldn't take more than 4 clock cycles (after prescaler applied)
+			if (!(sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG) & PWM_RDY(pwm->hwpwm))) {
+				// Not busy anymore
+				break;
+			}
+		}
+	} else {
+		udelay(20);
+	}
+	
+	// Create one pulse to speed up the change
+	spin_lock(&sun4i_pwm->ctrl_lock);
+	val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
+	val |= BIT_CH(PWM_EN | PWM_MODE | PWM_PULSE, pwm->hwpwm);
+	sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+	spin_unlock(&sun4i_pwm->ctrl_lock);
+	
+	for (i = 0; i < 10000; i++) {
+		if (!(sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG) & BIT_CH(PWM_PULSE, pwm->hwpwm))) {
+			// Done
+			break;
+		}
+	}
+	
+	sun4i_pwm_writel(sun4i_pwm,
+			 (dty & PWM_DTY_MASK) | PWM_PRD(prd),
+			 PWM_CH_PRD(pwm->hwpwm));
+
+	// Wait until value has been written
+	if (sun4i_pwm->data->has_rdy) {
+		for (i = 0; i < 10000; i++) { // Shouldn't take more than 4 clock cycles (after prescaler applied)
+			if (!(sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG) & PWM_RDY(pwm->hwpwm))) {
+				// Not busy anymore
+				break;
+			}
+		}
+	} else {
+		udelay(20);
+	}
+	
+	spin_lock(&sun4i_pwm->ctrl_lock);
+	if (!clk_gate) {
 		val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
-		val |= clk_gate;
+		val &= ~BIT_CH(PWM_CLK_GATING | PWM_EN | PWM_MODE, pwm->hwpwm);
+		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+		val &= ~BIT_CH(PWM_PRESCAL_MASK, pwm->hwpwm);
+		val |= BIT_CH(prescaler, pwm->hwpwm);
+		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+	} else if ((sun4i_pwm->data->has_prescaler_bypass ? PWM_PRESCAL_MASK : 0) == prescaler) {
+		val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
+		val &= ~BIT_CH(PWM_MODE, pwm->hwpwm);
+		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+	} else {
+		val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
+		val &= ~BIT_CH(PWM_CLK_GATING | PWM_MODE, pwm->hwpwm);
+		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+		val &= ~BIT_CH(PWM_PRESCAL_MASK, pwm->hwpwm);
+		val |= BIT_CH(prescaler, pwm->hwpwm);
+		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
+		val |= BIT_CH(PWM_CLK_GATING, pwm->hwpwm);
 		sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
 	}
-
 	spin_unlock(&sun4i_pwm->ctrl_lock);
+
 	clk_disable_unprepare(sun4i_pwm->clk);
 
 	return 0;
@@ -240,11 +320,22 @@ static int sun4i_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 static void sun4i_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct sun4i_pwm_chip *sun4i_pwm = to_sun4i_pwm_chip(chip);
-	u32 val;
+	u32 val, prescaler_value;
 
 	spin_lock(&sun4i_pwm->ctrl_lock);
 	val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
 	val &= ~BIT_CH(PWM_EN, pwm->hwpwm);
+	sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG); // Emil
+	spin_unlock(&sun4i_pwm->ctrl_lock);
+	
+	prescaler_value = prescaler_table[(val >> (pwm->hwpwm * PWMCH_OFFSET)) & PWM_PRESCAL_MASK];
+	if (prescaler_value == 0) {
+		prescaler_value = 1;
+	}
+	sun4i_pwm_sleep_cycles(prescaler_value, clk_get_rate(sun4i_pwm->clk), 2);
+	
+	spin_lock(&sun4i_pwm->ctrl_lock);
+	val = sun4i_pwm_readl(sun4i_pwm, PWM_CTRL_REG);
 	val &= ~BIT_CH(PWM_CLK_GATING, pwm->hwpwm);
 	sun4i_pwm_writel(sun4i_pwm, val, PWM_CTRL_REG);
 	spin_unlock(&sun4i_pwm->ctrl_lock);
