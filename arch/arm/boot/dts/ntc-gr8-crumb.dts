@@ -50,6 +50,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pwm/pwm.h>
 
 / {
 	model = "NextThing Crumb";
@@ -93,6 +94,11 @@
 		regulator-name = "vcc-wifi";
 		vin0-supply = <&reg_ldo3>;
 		vin1-supply = <&reg_ldo4>;
+	};
+
+	irled  {
+		compatible = "pwm-ir-tx";
+		pwms = <&pwm 1 26316 PWM_POLARITY_INVERTED>;
 	};
 };
 
@@ -162,31 +168,33 @@
 		reg = <0>;
 		allwinner,rb = <0>;
 		nand-ecc-mode = "hw";
+		nand-ecc-strength = <32>;
+		nand-ecc-step-size = <1024>;
 		nand-on-flash-bbt;
 
 		spl@0 {
 			label = "SPL";
-			reg = /bits/ 64 <0x0 0x400000>;
+			reg = /bits/ 64 <0x0 0x80000>;
 		};
 
-		spl-backup@400000 {
+		spl-backup@80000 {
 			label = "SPL.backup";
-			reg = /bits/ 64 <0x400000 0x400000>;
+			reg = /bits/ 64 <0x80000 0x80000>;
 		};
 
-		u-boot@800000 {
+		u-boot@100000 {
 			label = "U-Boot";
-			reg = /bits/ 64 <0x800000 0x400000>;
+			reg = /bits/ 64 <0x100000 0x100000>;
 		};
 
-		env@c00000 {
-			label = "env";
-			reg = /bits/ 64 <0xc00000 0x400000>;
+		u-boot-backup@200000 {
+			label = "U-Boot.backup";
+			reg = /bits/ 64 <0x200000 0x100000>;
 		};
 
-		rootfs@1000000 {
+		rootfs@300000 {
 			label = "rootfs";
-			reg = /bits/ 64 <0x1000000 0x1ff000000>;
+			reg = /bits/ 64 <0x300000 0x1fd00000>;
 		};
 	};
 };
@@ -273,6 +281,12 @@
 &uart3 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart3_pins_a>, <&uart3_cts_rts_pins_a>;
+	status = "okay";
+};
+
+&ir0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ir0_rx_pins_a>;
 	status = "okay";
 };
 
