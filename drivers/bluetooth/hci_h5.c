@@ -238,16 +238,19 @@ static int h5_close(struct hci_uart *hu)
 	return 0;
 }
 
-static void h5_pkt_cull(struct h5 *h5)
+static void h5_pkt_cull(struct hci_uart *hu)
 {
+	struct h5 *h5 = hu->priv;
 	struct sk_buff *skb, *tmp;
 	unsigned long flags;
 	int i, to_remove;
+	bool was_full;
 	u8 seq;
 
 	spin_lock_irqsave(&h5->unack.lock, flags);
 
 	to_remove = skb_queue_len(&h5->unack);
+	was_full = to_remove == h5->tx_win;
 	if (to_remove == 0)
 		goto unlock;
 
@@ -278,6 +281,8 @@ static void h5_pkt_cull(struct h5 *h5)
 
 unlock:
 	spin_unlock_irqrestore(&h5->unack.lock, flags);
+	if (was_full && to_remove > 0 && !skb_queue_empty(&h5->rel))
+		hci_uart_tx_wakeup(hu);
 }
 
 static void h5_handle_internal_rx(struct hci_uart *hu)
@@ -354,7 +359,7 @@ static void h5_complete_rx_pkt(struct hci_uart *hu)
 
 	h5->rx_ack = H5_HDR_ACK(hdr);
 
-	h5_pkt_cull(h5);
+	h5_pkt_cull(hu);
 
 	switch (H5_HDR_PKT_TYPE(hdr)) {
 	case HCI_EVENT_PKT:
@@ -419,6 +424,8 @@ static int h5_rx_3wire_hdr(struct hci_uart *hu, unsigned char c)
 	if (H5_HDR_RELIABLE(hdr) && H5_HDR_SEQ(hdr) != h5->tx_ack) {
 		BT_ERR("Out-of-order packet arrived (%u != %u)",
 		       H5_HDR_SEQ(hdr), h5->tx_ack);
+		set_bit(H5_TX_ACK_REQ, &h5->flags);
+		hci_uart_tx_wakeup(hu);
 		h5_reset_rx(h5);
 		return 0;
 	}
