@@ -32,6 +32,12 @@ config LIRC_PARALLEL
 	help
 	  Driver for Homebrew Parallel Port Receivers
 
+config LIRC_R8
+	tristate "Homebrew GPIO Port Receiver/Transmitter for the Allwinner R8"
+	depends on LIRC
+	help
+	  Driver for Homebrew GPIO Port Receiver/Transmitter for the Allwinner R8
+
 config LIRC_SASEM
 	tristate "Sasem USB IR Remote"
 	depends on LIRC && USB
