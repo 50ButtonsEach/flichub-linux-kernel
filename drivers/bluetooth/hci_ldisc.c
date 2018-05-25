@@ -123,14 +123,27 @@ static inline struct sk_buff *hci_uart_dequeue(struct hci_uart *hu)
 
 int hci_uart_tx_wakeup(struct hci_uart *hu)
 {
-	if (test_and_set_bit(HCI_UART_SENDING, &hu->tx_state)) {
+	/*if (test_and_set_bit(HCI_UART_SENDING, &hu->tx_state)) {
 		set_bit(HCI_UART_TX_WAKEUP, &hu->tx_state);
 		return 0;
 	}
 
 	BT_DBG("");
 
-	schedule_work(&hu->write_work);
+	schedule_work(&hu->write_work);*/
+
+	unsigned long val, oldval;
+
+	val = hu->tx_state;
+	for (;;) {
+		oldval = cmpxchg(&hu->tx_state, val, HCI_UART_TX_PENDING);
+		if (oldval == val)
+			break;
+		val = oldval;
+	}
+	
+	if (val == HCI_UART_TX_IDLE)
+		schedule_work(&hu->write_work);
 
 	return 0;
 }
@@ -147,7 +160,7 @@ static void hci_uart_write_work(struct work_struct *work)
 	 */
 
 restart:
-	clear_bit(HCI_UART_TX_WAKEUP, &hu->tx_state);
+	hu->tx_state = HCI_UART_TX_SENDING;
 
 	while ((skb = hci_uart_dequeue(hu))) {
 		int len;
@@ -166,10 +179,10 @@ restart:
 		kfree_skb(skb);
 	}
 
-	if (test_bit(HCI_UART_TX_WAKEUP, &hu->tx_state))
+	if (cmpxchg(&hu->tx_state, HCI_UART_TX_SENDING, HCI_UART_TX_IDLE) != HCI_UART_TX_SENDING)
 		goto restart;
 
-	clear_bit(HCI_UART_SENDING, &hu->tx_state);
+	//clear_bit(HCI_UART_SENDING, &hu->tx_state);
 }
 
 static void hci_uart_init_work(struct work_struct *work)
