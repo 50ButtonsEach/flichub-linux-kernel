@@ -401,7 +401,7 @@ int ubiblock_create(struct ubi_volume_info *vi)
 		goto out_put_disk;
 	}
 	gd->private_data = dev;
-	sprintf(gd->disk_name, "ubiblock%d_%d", dev->ubi_num, dev->vol_id);
+	sprintf(gd->disk_name, "ubiblock%d_%s", dev->ubi_num, vi->name);
 	set_capacity(gd, disk_capacity);
 	dev->gd = gd;
 
