@@ -92,6 +92,31 @@ static ssize_t duty_cycle_store(struct device *child,
 	return ret ? : size;
 }
 
+static ssize_t period_and_duty_cycle_show(struct device *child,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	const struct pwm_device *pwm = child_to_pwm_device(child);
+
+	return sprintf(buf, "%u %u\n", pwm_get_period(pwm), pwm_get_duty_cycle(pwm));
+}
+
+static ssize_t period_and_duty_cycle_store(struct device *child,
+					   struct device_attribute *attr,
+					   const char *buf, size_t size)
+{
+	struct pwm_device *pwm = child_to_pwm_device(child);
+	unsigned int period, duty_cycle;
+	int ret;
+
+	if (sscanf(buf, "%u%u", &period, &duty_cycle) != 2)
+		return -EINVAL;
+
+	ret = pwm_config(pwm, duty_cycle, period);
+
+	return ret ? : size;
+}
+
 static ssize_t enable_show(struct device *child,
 			   struct device_attribute *attr,
 			   char *buf)
@@ -169,12 +194,14 @@ static ssize_t polarity_store(struct device *child,
 
 static DEVICE_ATTR_RW(period);
 static DEVICE_ATTR_RW(duty_cycle);
+static DEVICE_ATTR_RW(period_and_duty_cycle);
 static DEVICE_ATTR_RW(enable);
 static DEVICE_ATTR_RW(polarity);
 
 static struct attribute *pwm_attrs[] = {
 	&dev_attr_period.attr,
 	&dev_attr_duty_cycle.attr,
+	&dev_attr_period_and_duty_cycle.attr,
 	&dev_attr_enable.attr,
 	&dev_attr_polarity.attr,
 	NULL
